@@ -1,0 +1,29 @@
+[project]
+name = "call_me_maybe"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "llm_sdk"
+]
+
+[tool.uv.workspace]
+members = [
+    "src/llm_sdk"
+]
+
+[tool.uv.sources]
+llm_sdk = { workspace = true, editable = true }
+
+[dependency-groups]
+dev = [
+    "flake8>=7.3.0",
+    "mypy>=2.3.0",
+]
+
+[tool.mypy]
+exclude = [
+    ".venv",
+    "src/llm_sdk"
+]
