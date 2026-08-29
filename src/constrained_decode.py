@@ -1,6 +1,6 @@
 import json
 from typing import Any, Callable
-from .llm_sdk.llm_sdk import Small_LLM_Model
+from llm_sdk import Small_LLM_Model
 
 
 # --- GPT style byte-level BPE decoder (standard, public algorithm) ---
@@ -11,19 +11,19 @@ def _bytes_to_unicode() -> dict[int, str]:
 
     bs: 印字可能だから触らなくてもよいバイト値たち  # ¬:u00ac, ®:u00ae, ÿ:u00ff
     """
-    bs = (
+    bs: list[int] = (
         list(range(ord("!"), ord("~") + 1))
         + list(range(ord("i"), ord("¬") + 1))
         + list(range(ord("®"), ord("ÿ") + 1))
     )
-    cs = bs[:]
+    bs_copy = bs[:]
     n = 0
     for b in range(256):
         if b not in bs:
             bs.append(b)
-            cs.append(256 + n)
+            bs_copy.append(256 + n)
             n += 1
-    cs = [chr(n) for n in cs]
+    cs: list[str] = [chr(n) for n in bs_copy]
     return dict(zip(bs, cs))
 
 
@@ -209,7 +209,7 @@ class ConstrainedJSONGenerator:
 
         return {"prompt": self.prompt,
                 "name": fn_name,
-                "parameter": collected_params}
+                "parameters": collected_params}
 
 
 if __name__ == "__main__":
