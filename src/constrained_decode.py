@@ -1,6 +1,6 @@
 import json
 from typing import Any, Callable
-from llm_sdk.llm_sdk import Small_LLM_Model
+from .llm_sdk.llm_sdk import Small_LLM_Model
 
 
 # --- GPT style byte-level BPE decoder (standard, public algorithm) ---
@@ -72,20 +72,6 @@ class ConstrainedJSONGenerator:
         if best_id is None:
             raise RuntimeError("no valid token for current constraint state")
         return best_id
-
-    # def _force_literal(self, input_ids: list[int], literal: str) -> list[int]:
-    #     """Emit exactly `literal`, token by token , letting the model pick
-    #     among tokens that are a valid prefix of what's left."""
-    #     remaining = literal
-    #     while remaining:
-    #         def is_valid(tok_str: str, remaining: str = remaining) -> bool:
-    #             return len(tok_str) > 0 and remaining.startwith(tok_str)
-
-    #         tok_id = self._mask_and_pick(input_ids, is_valid)
-    #         tok_str = self.vocab[tok_id]
-    #         input_ids.append(tok_id)
-    #         remaining = remaining[len(tok_str):]
-    #     return input_ids
 
     def _force_literal(self, input_ids: list[int], literal: str) -> list[int]:
         literal_ids = self.model.encode(literal)[0].tolist()
@@ -181,7 +167,12 @@ class ConstrainedJSONGenerator:
         return input_ids, collected
 
     def generate(self) -> dict[str, Any]:
-        input_ids = self.model.encode(self.prompt)[0].tolist()
+        functions_desc = "\n".join(
+            f'- {fn["name"]}: {fn["description"]}'
+            for fn in self.functions.values()
+        )
+        system_context = f"Available functions:\n{functions_desc}\n\nQuery: "
+        input_ids = self.model.encode(system_context + self.prompt)[0].tolist()
 
         input_ids = self._force_literal(input_ids, '{"prompt": "')
         input_ids = self._force_literal(input_ids, self.prompt)
@@ -227,8 +218,15 @@ if __name__ == "__main__":
 
     with open("data/input/functions_definition.json", encoding="utf-8") as f:
         functions = json.load(f)
+    with open("data/input/function_calling_tests.json", encoding="utf-8") as f:
+        test_prompts = json.load(f)
 
-    gen = ConstrainedJSONGenerator(model, vocab, functions,
-                                   "What is the sum of 2 and 3?")
-    result = gen.generate()
-    print(json.dumps(result, indent=2))
+    results = []
+    # for prompt in test_prompts:
+    #     prompt = prompt["prompt"]
+    #     gen = ConstrainedJSONGenerator(model, vocab, functions, prompt)
+    #     results.append(gen.generate())
+    prompt = "What is the sum of 2 and 3?"
+    gen = ConstrainedJSONGenerator(model, vocab, functions, prompt)
+    results.append(gen.generate())
+    print(json.dumps(results, indent=2))
