@@ -49,10 +49,12 @@ def _load_json(path: Path) -> Any:
     """Read and JSON-decode a file. Raises FileReadError on any I/O or
     syntax problem, with a message identifying which file failed."""
     try:
-        with open(path, encoding="utf-8") as f:
+        with open(path, mode="r", encoding="utf-8") as f:
             return json.load(f)
     except FileNotFoundError as e:
         raise FileReadError(f"file not found: {path}") from e
+    except UnicodeDecodeError as e:
+        raise FileReadError(f"could not decode {path} as UTF-8") from e
     except json.JSONDecodeError as e:
         raise FileReadError(f"invalid JSON in {path}: {e}") from e
 

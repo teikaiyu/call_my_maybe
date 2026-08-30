@@ -1,2 +1,2 @@
 [flake8]
-exclude = .venv, data, .mypy_cache, __pycache__
+exclude = .venv, data, .mypy_cache, __pycache__, llm_sdk
