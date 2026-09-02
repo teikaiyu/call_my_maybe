@@ -1,16 +1,25 @@
+"""Constrained decoding: force the model to emit valid function-calling JSON.
+
+Core idea: at every generation step, restrict the vocab to tokens that keep
+the output consistent with the JSON structure and the schema
+(function name enum, parameter names/types from functions_definition.json).
+
+Known/fixed parts (braces, key names, the prompt value itself) are forced
+literally. Only two things are genuinely uncertain and need real constraint:
+    - "name": must match one of the function names (enum)
+    - each parameter value: constrained by its declared type
+
+This is a first working version, not exhaustive edge-case handling
+(string escaping, unicode edge cases, etc. are simplified).
+"""
 import json
 from typing import Any, Callable
 from llm_sdk import Small_LLM_Model
 
 
-# --- GPT style byte-level BPE decoder (standard, public algorithm) ---
+# --- GPT style byte-level BPE decoder (standard, public algorithm) -----------
 
 def _bytes_to_unicode() -> dict[int, str]:
-    """256種類のバイト値と256種類の'印字可能な'文字の変換表。文字←→バイト値の可逆性確保
-    BPEトークナイザのバイト単位処理をしやすくするために、画面に表示できない、しづらい制御文字や空白などを印字できる普通の文字に付け替えるため
-
-    bs: 印字可能だから触らなくてもよいバイト値たち  # ¬:u00ac, ®:u00ae, ÿ:u00ff
-    """
     bs: list[int] = (
         list(range(ord("!"), ord("~") + 1))
         + list(range(ord("i"), ord("¬") + 1))
@@ -31,11 +40,12 @@ _BYTE_DECODER = {v: k for k, v in _bytes_to_unicode().items()}
 
 
 def _token_to_string(token: str) -> str:
+    """Convert a raw vocab entry (e.g. "Ġhello") into its real text."""
     try:
         return bytes(_BYTE_DECODER[c] for c in token if c in _BYTE_DECODER
                      ).decode("utf-8", errors="ignore")
     except (KeyError, UnicodeDecodeError):
-        return token
+        return token  # special tokens etc. fall back to raw form
 
 
 def load_vocab(vocab_path: str) -> dict[int, str]:
@@ -43,6 +53,8 @@ def load_vocab(vocab_path: str) -> dict[int, str]:
         raw: dict[str, int] = json.load(f)
     return {tok_id: _token_to_string(tok) for tok, tok_id in raw.items()}
 
+
+# --- constrained generation engine--------------------------------------------
 
 class ConstrainedJSONGenerator:
     def __init__(
@@ -212,21 +224,23 @@ class ConstrainedJSONGenerator:
                 "parameters": collected_params}
 
 
-if __name__ == "__main__":
-    model = Small_LLM_Model()
-    vocab = load_vocab(model.get_path_to_vocab_file())
+# # debug prompt
+# if __name__ == "__main__":
+#     model = Small_LLM_Model()
+#     vocab = load_vocab(model.get_path_to_vocab_file())
 
-    with open("data/input/functions_definition.json", encoding="utf-8") as f:
-        functions = json.load(f)
-    with open("data/input/function_calling_tests.json", encoding="utf-8") as f:
-        test_prompts = json.load(f)
+#     with open("data/input/functions_definition.json", encoding="utf-8") as f:
+#         functions = json.load(f)
+#     with open("data/input/function_calling_tests.json",
+#       encoding="utf-8") as f:
+#         test_prompts = json.load(f)
 
-    results = []
-    # for prompt in test_prompts:
-    #     prompt = prompt["prompt"]
-    #     gen = ConstrainedJSONGenerator(model, vocab, functions, prompt)
-    #     results.append(gen.generate())
-    prompt = "What is the sum of 2 and 3?"
-    gen = ConstrainedJSONGenerator(model, vocab, functions, prompt)
-    results.append(gen.generate())
-    print(json.dumps(results, indent=2))
+#     results = []
+#     # for prompt in test_prompts:
+#     #     prompt = prompt["prompt"]
+#     #     gen = ConstrainedJSONGenerator(model, vocab, functions, prompt)
+#     #     results.append(gen.generate())
+#     prompt = "What is the sum of 2 and 3?"
+#     gen = ConstrainedJSONGenerator(model, vocab, functions, prompt)
+#     results.append(gen.generate())
+#     print(json.dumps(results, indent=2))
