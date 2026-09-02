@@ -7,6 +7,7 @@ from .parse import (
 )
 from .constrained_decode import ConstrainedJSONGenerator, load_vocab
 from llm_sdk import Small_LLM_Model
+import time
 
 
 DEFAULTS: dict[str, str] = {
@@ -43,12 +44,13 @@ def parse_args(argv: list[str]) -> dict[str, str]:
 
 def main() -> None:
     try:
+        start_time = time.time()
         system = parse_args(sys.argv[1:])
 
         functions = parse_functions_definition(
-            system["--functions_definition"])
+            Path(system["--functions_definition"]))
         functions_raw = [f.model_dump() for f in functions]
-        prompts = parse_test_prompts(system["--input"])
+        prompts = parse_test_prompts(Path(system["--input"]))
 
         model = Small_LLM_Model()
         vocab = load_vocab(model.get_path_to_vocab_file())
@@ -61,6 +63,10 @@ def main() -> None:
         Path(system["--output"]).parent.mkdir(parents=True, exist_ok=True)
         with open(system["--output"], mode="w", encoding="utf-8") as f:
             json.dump(results, f, indent=2)
+
+        elapsed = time.time() - start_time
+        print(f"\nDone. {len(results)} prompt(s) processed in {elapsed:.1f}s"
+              f" -> {system['--output']}")
     except ArgumentError as e:
         print(f"ArgumentError: {e}", file=sys.stderr)
         sys.exit(1)

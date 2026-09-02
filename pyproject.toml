@@ -26,7 +26,7 @@ dev = [
 [tool.mypy]
 exclude = [
     ".venv",
-    "src/llm_sdk"
+    "llm_sdk"
 ]
 
 [[tool.mypy.overrides]]

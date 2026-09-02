@@ -74,7 +74,7 @@ class ConstrainedJSONGenerator:
         return best_id
 
     def _force_literal(self, input_ids: list[int], literal: str) -> list[int]:
-        literal_ids = self.model.encode(literal)[0].tolist()
+        literal_ids: list[int] = self.model.encode(literal)[0].tolist()
         return input_ids + literal_ids
 
     def _generate_enum(
