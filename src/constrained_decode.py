@@ -13,7 +13,7 @@ This is a first working version, not exhaustive edge-case handling
 (string escaping, unicode edge cases, etc. are simplified).
 """
 import json
-from typing import Any, Callable
+from typing import Any, Iterable
 from llm_sdk import Small_LLM_Model
 
 
@@ -69,71 +69,147 @@ class ConstrainedJSONGenerator:
         self.functions = {f["name"]: f for f in functions}
         self.prompt = prompt
 
+        self.vocab_trie = self._build_vocab_trie()
+        self.enum_trie = self._build_trie(self.functions.keys())
+        self.bool_trie = self._build_trie(["true", "false"])
+
+        self.number_tok_ids = {
+            tid for tid, s in self.vocab.items()
+            if len(s) > 0 and all(c in "0123456789.-" for c in s)
+        }
+        self.free_string_tok_ids = {
+            tid for tid, s in self.vocab.items()
+            if len(s) > 0 and '"' not in s and '\\' not in s
+        }
+
+        self._quote_tok_id = self._find_tok_id('"')
+        self._comma_tok_id = self._find_tok_id(',')
+        self._close_brace_tok_id = self._find_tok_id('}')
+
+    def _find_tok_id(self, c: str) -> int:
+        return next(tid for tid, s in self.vocab.items() if s == c)
+
+    def _build_trie(self, vocab: Iterable[str]) -> dict[str | None, Any]:
+        trie: dict[str | None, Any] = {}
+        for word in vocab:
+            current = trie
+            for char in word:
+                if char not in current:
+                    current[char] = {}
+                current = current[char]
+            current[None] = True
+        return trie
+
+    def _build_vocab_trie(self) -> dict[str | None, Any]:
+        trie: dict[str | None, Any] = {}
+        for tok_id, tok_str in self.vocab.items():
+            if len(tok_str) == 0:
+                continue
+            current = trie
+            for char in tok_str:
+                if char not in current:
+                    current[char] = {}
+                current = current[char]
+            current[None] = tok_id
+        return trie
+
+    def _walk(
+            self,
+            enum_node: dict[str | None, Any],
+            vocab_node: dict[str | None, Any],
+            candids: dict[int, Any]
+    ) -> None:
+        """Simultaneously descend enum_trie and vocab_trie. Whenever vocab_node
+        marks the end of a real token, record that token_id as a valid choice,
+        mapped to the enum_trie position it would leave us at. Mutates
+        `candids` in place; returns nothing."""
+        if None in vocab_node:
+            candids[vocab_node[None]] = enum_node
+        for char in vocab_node:
+            if char is None:
+                continue
+            if char in enum_node:
+                self._walk(enum_node[char], vocab_node[char], candids)
+
     def _mask_and_pick(
-            self, input_ids: list[int], is_valid: Callable[[str], bool]
+            self, input_ids: list[int], allowed_ids: set[int]
     ) -> int:
         """Get logits, zero out (via -inf) everything invalid, argmax the rest.
         """
         logits = self.model.get_logits_from_input_ids(input_ids)
         best_id, best_val = None, float("-inf")
-        for tok_id, tok_str in self.vocab.items():
-            if tok_id >= len(logits):
-                continue
-            if is_valid(tok_str) and logits[tok_id] > best_val:
+        for tok_id in allowed_ids:
+            if tok_id < len(logits) and logits[tok_id] > best_val:
                 best_id, best_val = tok_id, logits[tok_id]
         if best_id is None:
             raise RuntimeError("no valid token for current constraint state")
         return best_id
 
     def _force_literal(self, input_ids: list[int], literal: str) -> list[int]:
+        # remaining = literal
+        # while remaining:
+        #     allowed: dict[int, Any] = {}
+        #     node = self.vocab_trie
+        #     for c in remaining:
+        #         if c not in node:
+        #             break
+        #         node = node[c]
+        #         if None in node:
+        #             allowed[node[None]] = None
+        #     tok_id = self._mask_and_pick(input_ids, set(allowed.keys()))
+        #     tok_str = self.vocab[tok_id]
+        #     input_ids.append(tok_id)
+        #     remaining = remaining[len(tok_str):]
+        # return input_ids
         literal_ids: list[int] = self.model.encode(literal)[0].tolist()
         return input_ids + literal_ids
 
-    def _generate_enum(
-            self, input_ids: list[int], options: list[str]
-    ) -> tuple[list[int], str]:
+    def _generate_enum(self, input_ids: list[int]) -> tuple[list[int], str]:
         """Generate a quoted string value that must exactly match one of
         `options`."""
-        remaining_options = options
+        enum_node = self.enum_trie
         collected = ""
         while True:
-            def is_valid(tok_str: str) -> bool:
-                if collected in options and tok_str == '"':
-                    return True
-                return len(tok_str) > 0 and any(
-                    opt[len(collected):].startswith(tok_str)
-                    for opt in remaining_options
-                )
-
-            tok_id = self._mask_and_pick(input_ids, is_valid)
+            candids: dict[int, Any] = {}
+            self._walk(enum_node, self.vocab_trie, candids)
+            if None in enum_node:
+                candids[self._quote_tok_id] = enum_node
+            tok_id = self._mask_and_pick(input_ids, set(candids.keys()))
             tok_str = self.vocab[tok_id]
             input_ids.append(tok_id)
-            if tok_str == '"' and collected in options:
+
+            if tok_str == '"' and None in enum_node:
                 break
+
             collected += tok_str
-            remaining_options = [o for o in remaining_options
-                                 if o.startswith(collected)]
+            enum_node = candids[tok_id]
         return input_ids, collected
 
     def _generate_enum_bare(
-            self, input_ids: list[int], options: list[str]
+            self, input_ids: list[int]
     ) -> tuple[list[int], str]:
-        """Same as _generate_enum but for unquoted literals (true/false)."""
-        remaining_options = options
+        """Generate an unquoted true/false literal"""
+        bool_node = self.bool_trie
         collected = ""
-        while collected not in options:
-            def is_valid(tok_str: str) -> bool:
-                return len(tok_str) > 0 and any(
-                    opt[len(collected):].startswith(tok_str)
-                    for opt in remaining_options
-                )
 
-            tok_id = self._mask_and_pick(input_ids, is_valid)
+        while True:
+            candids: dict[int, Any] = {}
+            self._walk(bool_node, self.vocab_trie, candids)
+
+            if None in bool_node:
+                candids[self._comma_tok_id] = bool_node
+                candids[self._close_brace_tok_id] = bool_node
+
+            tok_id = self._mask_and_pick(input_ids, set(candids.keys()))
             tok_str = self.vocab[tok_id]
+
+            if tok_str in (",", "}") and None in bool_node:
+                break
+
             input_ids.append(tok_id)
             collected += tok_str
-            remaining_options = [o for o in remaining_options
-                                 if o.startswith(collected)]
+            bool_node = candids[tok_id]
+
         return input_ids, collected
 
     def _generate_number(
@@ -143,15 +219,13 @@ class ConstrainedJSONGenerator:
         choices so the model can naturally signal 'done' without us guessing
         a fixed length; they are NOT consumed here, _force_literal adds them.
         """
-        allowed = set("0123456789.-")
         collected = ""
         while True:
-            def is_valid(tok_str: str) -> bool:
-                if tok_str in (",", "}") and collected:
-                    return True
-                return len(tok_str) > 0 and all(c in allowed for c in tok_str)
-
-            tok_id = self._mask_and_pick(input_ids, is_valid)
+            allowed = set(self.number_tok_ids)
+            if collected:
+                allowed.add(self._comma_tok_id)
+                allowed.add(self._close_brace_tok_id)
+            tok_id = self._mask_and_pick(input_ids, allowed)
             tok_str = self.vocab[tok_id]
             if tok_str in (",", "}"):
                 break
@@ -166,11 +240,10 @@ class ConstrainedJSONGenerator:
         """
         collected = ""
         while len(collected) < max_chars:
-            def is_valid(tok_str: str) -> bool:
-                return tok_str == '"' or ('"' not in tok_str
-                                          and "\\" not in tok_str)
+            allowed = set(self.free_string_tok_ids)
+            allowed.add(self._quote_tok_id)
 
-            tok_id = self._mask_and_pick(input_ids, is_valid)
+            tok_id = self._mask_and_pick(input_ids, allowed)
             tok_str = self.vocab[tok_id]
             input_ids.append(tok_id)
             if tok_str == '"':
@@ -189,8 +262,7 @@ class ConstrainedJSONGenerator:
         input_ids = self._force_literal(input_ids, '{"prompt": "')
         input_ids = self._force_literal(input_ids, self.prompt)
         input_ids = self._force_literal(input_ids, '", "name": "')
-        input_ids, fn_name = self._generate_enum(input_ids,
-                                                 list(self.functions.keys()))
+        input_ids, fn_name = self._generate_enum(input_ids)
         input_ids = self._force_literal(input_ids, '", "parameters": {')
 
         fn_def = self.functions[fn_name]
@@ -208,8 +280,7 @@ class ConstrainedJSONGenerator:
                 input_ids, value = self._generate_number(input_ids)
                 collected_params[param_name] = float(value)
             elif value_type == "boolean":
-                input_ids, value = self._generate_enum_bare(input_ids,
-                                                            ["true", "false"])
+                input_ids, value = self._generate_enum_bare(input_ids)
                 collected_params[param_name] = value == "true"
             else:
                 raise ValueError(f"unsupported parameter type: {value_type}")
@@ -222,25 +293,3 @@ class ConstrainedJSONGenerator:
         return {"prompt": self.prompt,
                 "name": fn_name,
                 "parameters": collected_params}
-
-
-# # debug prompt
-# if __name__ == "__main__":
-#     model = Small_LLM_Model()
-#     vocab = load_vocab(model.get_path_to_vocab_file())
-
-#     with open("data/input/functions_definition.json", encoding="utf-8") as f:
-#         functions = json.load(f)
-#     with open("data/input/function_calling_tests.json",
-#       encoding="utf-8") as f:
-#         test_prompts = json.load(f)
-
-#     results = []
-#     # for prompt in test_prompts:
-#     #     prompt = prompt["prompt"]
-#     #     gen = ConstrainedJSONGenerator(model, vocab, functions, prompt)
-#     #     results.append(gen.generate())
-#     prompt = "What is the sum of 2 and 3?"
-#     gen = ConstrainedJSONGenerator(model, vocab, functions, prompt)
-#     results.append(gen.generate())
-#     print(json.dumps(results, indent=2))

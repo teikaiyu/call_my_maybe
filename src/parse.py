@@ -45,6 +45,27 @@ class TestPrompt(BaseModel):
     prompt: str
 
 
+def _format_validation_error(exc: ValidationError, index: int) -> str:
+    missing = [str(e["loc"][0]) if e["loc"] else "(entire entry)"
+               for e in exc.errors() if e["type"] == "missing"]
+    extra = [str(e["loc"][0]) if e["loc"] else "(entire entry)"
+             for e in exc.errors() if e["type"] == "extra_forbidden"]
+    other = [
+        f'{e["loc"][0] if e["loc"] else "(entire entry)"}: {e["msg"]}'
+        for e in exc.errors()
+        if e["type"] not in ("missing", "extra_forbidden")
+    ]
+
+    parts = []
+    if missing:
+        parts.append(f"missing required field(s): {','.join(missing)}")
+    if extra:
+        parts.append(f"unexpected field(s): {','.join(extra)}")
+    if other:
+        parts.append("; ".join(other))
+    return f"entry {index}: " + "; ".join(parts)
+
+
 def _load_json(path: Path) -> Any:
     """Read and JSON-decode a file. Raises FileReadError on any I/O or
     syntax problem, with a message identifying which file failed."""
@@ -69,8 +90,14 @@ def parse_functions_definition(path: Path) -> list[FunctionDefinition]:
             functions.append(FunctionDefinition.model_validate(entry))
         except ValidationError as e:
             raise SchemaValidationError(
-                f"{path}: entry {i} does not match expected schema: {e}"
+                f"{path}: {_format_validation_error(e, i)}"
             ) from e
+    names = [f.name for f in functions]
+    if len(names) != len(set(names)):
+        duplicates = {n for n in names if names.count(n) > 1}
+        raise SchemaValidationError(
+            f"{path}: duplicate function name(s): {', '.join(duplicates)}"
+        )
     return functions
 
 
@@ -86,6 +113,6 @@ def parse_test_prompts(path: Path) -> list[TestPrompt]:
             prompts.append(TestPrompt.model_validate(entry))
         except ValidationError as e:
             raise SchemaValidationError(
-                f"{path}: entry {i} does not match expected schema: {e}"
+                f"{path}: {_format_validation_error(e, i)}"
             ) from e
     return prompts

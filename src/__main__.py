@@ -68,19 +68,19 @@ def main() -> None:
         print(f"\nDone. {len(results)} prompt(s) processed in {elapsed:.1f}s"
               f" -> {system['--output']}")
     except ArgumentError as e:
-        print(f"ArgumentError: {e}", file=sys.stderr)
+        print(f"\nArgumentError: {e}", file=sys.stderr)
         sys.exit(1)
     except FileReadError as e:
-        print(f"FileReadError: {e}", file=sys.stderr)
+        print(f"\nFileReadError: {e}", file=sys.stderr)
         sys.exit(1)
     except OSError as e:
-        print(f"OSError: {e}", file=sys.stderr)
+        print(f"\nOSError: {e}", file=sys.stderr)
         sys.exit(1)
     except SchemaValidationError as e:
-        print(f"SchemaValidationError: {e}", file=sys.stderr)
+        print(f"\nSchemaValidationError: {e}", file=sys.stderr)
         sys.exit(1)
     except MemoryError as e:
-        print(f"MemoryError: {e}", file=sys.stderr)
+        print(f"\nMemoryError: {e}", file=sys.stderr)
         sys.exit(1)
 
 
